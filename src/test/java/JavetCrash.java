@@ -1,3 +1,4 @@
+import com.caoccao.javet.annotations.V8Function;
 import com.caoccao.javet.exceptions.JavetException;
 import com.caoccao.javet.interop.V8Host;
 import com.caoccao.javet.interop.V8Runtime;
@@ -10,10 +11,9 @@ import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 
 public class JavetCrash {
-
-    private static ConcurrentLinkedQueue<V8ValuePromise> queue = new ConcurrentLinkedQueue<>();
 
     @Test
     public void testJavetCrash() throws JavetException, NoSuchMethodException {
@@ -21,14 +21,15 @@ public class JavetCrash {
                 V8Runtime runtime = V8Host.getV8Instance().createV8Runtime();
                 V8ValueObject context = runtime.createV8ValueObject()
         ) {
-            JavetCallbackContext receiver = getJavetCallbackContext(runtime);
+            AsyncMethodWrapperV2 wrapper = getAsyncMethodWrapper(runtime);
+            JavetCallbackContext receiver = new JavetCallbackContext("invoke", wrapper, wrapper.getInvokeMethod());
             context.bindFunction(receiver);
 
             runtime.getExecutor("function main(context) { " +
                     "var complexClass = {'hello': 'hello'}; return context.invoke(complexClass); }"
             ).executeVoid();
 
-            final int REPEAT_COUNT = 10000;
+            final int REPEAT_COUNT = 100000;
             for (int i = 0; i < REPEAT_COUNT; i++) {
                 System.out.println("Repeat iteration #" + i);
                 try (V8Value ignored = runtime.getGlobalObject().invoke("main", context)) {
@@ -39,30 +40,19 @@ public class JavetCrash {
             }
 
             try {
-                while (queue.size() < REPEAT_COUNT) {
-                    Thread.sleep(10);
-                }
-                while (!queue.isEmpty()) {
-                    V8ValuePromise promise = queue.poll();
-                    while (!promise.isFulfilled()) {
-                        Thread.sleep(10);
-                    }
-                    promise.close();
-                }
+                wrapper.close();
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
-
-            System.out.println("AAA");
+            context.unbindFunction(receiver.getName());
+            runtime.lowMemoryNotification();
+            System.out.println("Completed with " + runtime.getReferenceCount());
         }
-
-
     }
 
     @NotNull
-    private static JavetCallbackContext getJavetCallbackContext(V8Runtime runtime) throws NoSuchMethodException {
-        AsyncMethodWrapper callbackObject = new AsyncMethodWrapper(runtime, queue, parameter -> {
-            System.out.println("Executing async function");
+    private static AsyncMethodWrapperV2 getAsyncMethodWrapper(V8Runtime runtime) {
+        return new AsyncMethodWrapperV2(runtime, parameter -> {
             try {
                 String hello = parameter.getString("hello");
                 assert hello.equals("hello");
@@ -75,53 +65,85 @@ public class JavetCrash {
                 throw new RuntimeException(e);
             }
         });
-
-        return new JavetCallbackContext("invoke", callbackObject, callbackObject.getInvokeMethod());
     }
 }
 
-class AsyncMethodWrapper {
-    private final V8Runtime runtime;
+class AsyncMethodWrapperV2 implements AutoCloseable, Runnable {
+    protected Thread daemonThread;
+    protected ConcurrentLinkedQueue<Task> queue;
+    protected volatile boolean quitting;
+    protected V8Runtime v8Runtime;
     private final java.util.function.Function<V8ValueObject, V8Value> block;
-    private final ConcurrentLinkedQueue<V8ValuePromise> promisesQueue;
 
-    public AsyncMethodWrapper(
+    public AsyncMethodWrapperV2(
             V8Runtime runtime,
-            ConcurrentLinkedQueue<V8ValuePromise> promiseQueue,
             java.util.function.Function<V8ValueObject, V8Value> block
     ) {
-        this.runtime = runtime;
+        v8Runtime = runtime;
         this.block = block;
-        this.promisesQueue = promiseQueue;
+
+        queue = new ConcurrentLinkedQueue<>();
+        quitting = false;
+        daemonThread = new Thread(this);
+        daemonThread.setName("MockFS Daemon");
+        daemonThread.start();
     }
 
-    public V8Value invoke(V8ValueObject parameter) {
-        try {
-            V8ValuePromise promise = runtime.createV8ValuePromise();
-            V8ValuePromise jsPromise = promise.getPromise();
-            V8ValueObject clonedParam = parameter.toClone();
+    @Override
+    public void close() throws Exception {
+        quitting = true;
+        daemonThread.join();
+    }
 
-            Thread thread = new Thread(() -> {
-                try {
-                    Thread.sleep(40);
-                    promise.resolve(block.apply(clonedParam));
-                } catch (JavetException | InterruptedException e) {
-                    throw new RuntimeException(e);
-                } finally {
-                    JavetResourceUtils.safeClose(clonedParam);
-                    promisesQueue.add(promise);
-                }
-            });
-            thread.start();
-
-            return jsPromise;
-        } catch (JavetException e) {
-            throw new RuntimeException(e);
-        }
+    public V8ValuePromise invoke(V8ValueObject object) throws JavetException {
+        V8ValuePromise v8ValuePromiseResolver = v8Runtime.createV8ValuePromise();
+        queue.add(new Task(v8ValuePromiseResolver, object.toClone()));
+        return v8ValuePromiseResolver.getPromise();
     }
 
 
     public java.lang.reflect.Method getInvokeMethod() throws NoSuchMethodException {
         return this.getClass().getMethod("invoke", V8ValueObject.class);
+    }
+
+    @Override
+    public void run() {
+        while (!quitting || !queue.isEmpty()) {
+            final int length = queue.size();
+            for (int i = 0; i < length; ++i) {
+                Task task = queue.poll();
+                if (task == null) {
+                    break;
+                }
+                try (
+                        V8ValuePromise promise = task.promise;
+                        V8ValueObject object = task.object
+                ) {
+                    Thread.sleep(0);
+                    promise.resolve(block.apply(object));
+                } catch (JavetException | InterruptedException e) {
+                    throw new RuntimeException(e);
+                } finally {
+                    JavetResourceUtils.safeClose(task.promise, task.object);
+
+                }
+            }
+            try {
+                TimeUnit.MILLISECONDS.sleep(1);
+            } catch (InterruptedException e) {
+                e.printStackTrace(System.err);
+            }
+        }
+        System.out.println("CLOSED ALL!");
+    }
+
+    static class Task {
+        private final V8ValueObject object;
+        private final V8ValuePromise promise;
+
+        public Task(V8ValuePromise promise, V8ValueObject object) {
+            this.object = object;
+            this.promise = promise;
+        }
     }
 }
