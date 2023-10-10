@@ -1,4 +1,3 @@
-import com.caoccao.javet.annotations.V8Function;
 import com.caoccao.javet.exceptions.JavetException;
 import com.caoccao.javet.interop.V8Host;
 import com.caoccao.javet.interop.V8Runtime;
@@ -26,17 +25,21 @@ public class JavetCrash {
             context.bindFunction(receiver);
 
             runtime.getExecutor("function main(context) { " +
-                    "var complexClass = {'hello': 'hello'}; return context.invoke(complexClass); }"
+                    "var complexClass = {'hello': 'hello'}; context.invoke(complexClass); }"
             ).executeVoid();
 
             final int REPEAT_COUNT = 100000;
             for (int i = 0; i < REPEAT_COUNT; i++) {
-                System.out.println("Repeat iteration #" + i);
-                try (V8Value ignored = runtime.getGlobalObject().invoke("main", context)) {
-                    Thread.sleep(0);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
+                while (wrapper.queue.size() > 10) {
+                    try {
+                        TimeUnit.MILLISECONDS.sleep(10L);
+                        runtime.lowMemoryNotification();
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
                 }
+                System.out.println("Repeat iteration #" + i);
+                runtime.getGlobalObject().invokeVoid("main", context);
             }
 
             try {
@@ -95,10 +98,9 @@ class AsyncMethodWrapperV2 implements AutoCloseable, Runnable {
         daemonThread.join();
     }
 
-    public V8ValuePromise invoke(V8ValueObject object) throws JavetException {
+    public void invoke(V8ValueObject object) throws JavetException {
         V8ValuePromise v8ValuePromiseResolver = v8Runtime.createV8ValuePromise();
         queue.add(new Task(v8ValuePromiseResolver, object.toClone()));
-        return v8ValuePromiseResolver.getPromise();
     }
 
 
