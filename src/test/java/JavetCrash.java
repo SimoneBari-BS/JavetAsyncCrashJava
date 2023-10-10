@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 
-// TODO: update dependency to Javet 3.0.0
+// TODO: update Javet dependency to right platform
 public class JavetCrash {
 
     @Test
@@ -31,7 +31,7 @@ public class JavetCrash {
 
             final int REPEAT_COUNT = 100000;
             for (int i = 0; i < REPEAT_COUNT; i++) {
-                while (wrapper.queue.size() > 10) {
+                while (wrapper.queue.size() > 100) {
                     try {
                         TimeUnit.MILLISECONDS.sleep(10L);
                         runtime.lowMemoryNotification();

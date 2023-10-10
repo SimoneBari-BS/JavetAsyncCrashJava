@@ -13,7 +13,7 @@ repositories {
 
 dependencies {
     testImplementation(kotlin("test"))
-    implementation("com.caoccao.javet:javet-macos:2.2.3")
+//    implementation("com.caoccao.javet:javet-macos:2.2.3")
     testImplementation("org.eclipse.jetty.websocket:websocket-server:9.4.49.v20220914")
     testImplementation("org.eclipse.jetty.websocket:javax-websocket-server-impl:9.4.49.v20220914")
     testImplementation("com.fasterxml.jackson.core:jackson-databind:2.14.0-rc2")
@@ -22,6 +22,7 @@ dependencies {
     testImplementation("net.bytebuddy:byte-buddy:1.12.17")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+    implementation(files("src/libs/javet-macos-3.0.0/javet-macos-3.0.0.jar")) // switch to correct platform
 }
 
 tasks.test {
