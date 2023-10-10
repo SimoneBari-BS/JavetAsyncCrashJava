@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 
+// TODO: update dependency to Javet 3.0.0
 public class JavetCrash {
 
     @Test
